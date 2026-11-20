@@ -44,7 +44,9 @@ python neurovault_test/prepare_pilot_volumes_v2.py
 La selezione usa un seed pari a `42`, con un massimo di 5 mappe per collezione
 e 2 per coppia collezione–contrasto, per limitare la concentrazione del campione.
 
-Gli ID e i metadati sono salvati in `neurovault_test/outputs/pilot_diverse/`.
+Gli ID e lo snapshot della selezione sono salvati in `selections/pilot_diverse/`,
+separatamente dagli output rigenerabili. Aggiungi questi due JSON a Git dopo la
+revisione; la scansione dei candidati resta in `neurovault_test/outputs/pilot_diverse/`.
 Se `selected_ids.json` esiste già, lo script si ferma: per riutilizzare gli ID
 esistenti passa direttamente al download.
 
@@ -52,19 +54,41 @@ esistenti passa direttamente al download.
 
 `build_diverse_pilot_v1.py` scarica le mappe selezionate e le annotazioni
 Neurosynth usando Nilearn. I dati originali sono conservati in
-`neurovault_test/data/pilot/`.
+`neurovault_test/data/pilot_diverse/<SHA256-degli-ID>/`.
 
 I risultati principali in `neurovault_test/outputs/pilot_diverse/` sono:
 
-- `selected_ids.json`: ID delle immagini scaricate.
 - `manifest.csv`: metadati, percorsi dei file ed esito dei controlli.
 - `basic_pass_ids.json`: ID che superano i controlli preliminari.
 - `image_term_weights.csv`: matrice delle annotazioni con ID e nomi dei termini.
 - `metadata.json`: informazioni sul dataset e sull'esecuzione.
 
-Esegui la selezione prima del download per applicare i criteri di diversità:
-in assenza di `selected_ids.json`, il builder effettua una ricerca generica
-di mappe fMRI-BOLD di tipo Z.
+La selezione è obbligatoria: il builder non avvia ricerche generiche se manca.
+Prima di scrivere manifest e annotazioni verifica gli ID esatti, l'assenza di
+duplicati, il numero di file e la corrispondenza collezione/contrasto con lo
+snapshot. Conserva l'ordine restituito da Nilearn anche nelle righe dei pesi.
+Il builder non modifica mai la selezione.
+
+### Recuperare il pilota precedente
+
+Prima di generare una nuova selezione, se sul tuo computer è ancora disponibile
+`outputs/pilot_diverse/selection_metadata.json`, puoi recuperare gli ID originali:
+
+```bash
+python neurovault_test/select_diverse_pilot.py --import-legacy
+python neurovault_test/build_diverse_pilot_v1.py
+python neurovault_test/prepare_pilot_volumes_v2.py
+```
+
+L'importazione usa lo snapshot originale anziché il vecchio elenco ID, controlla
+i limiti di diversità e rifiuta di sovrascrivere una selezione esistente. Se lo
+snapshot è assente o non valido si interrompe: non può ricostruire da solo gli
+ID perduti. I JSON locali non sono inclusi in questa correzione del codice.
+La nuova cache è separata da `data/pilot/`, che resta disponibile.
+
+Se esiste già una selezione valida in `selections/`, passa direttamente al builder.
+I vecchi risultati preparati non vengono riparati automaticamente: riesegui il
+builder e la preparazione dopo aver recuperato/verificato la selezione.
 
 ### 3. Preparazione dei volumi
 
@@ -72,9 +96,18 @@ di mappe fMRI-BOLD di tipo Z.
 le mappe sul riferimento MNI152 a 3 mm e costruisce una maschera comune.
 Allinea inoltre le annotazioni allo stesso ordine delle immagini.
 
-Questa versione esclude esplicitamente gli ID `1753`, `1757` e `1759` per
-copertura geometrica insufficiente osservata nel campione corrente. Sono
-esclusioni specifiche dell'analisi, da rivalutare se cambia il campione.
+Le esclusioni e le relative motivazioni sono configurate in
+`selections/pilot_diverse/exclusions.json`. Il file iniziale elenca gli ID `1753`,
+`1757` e `1759` per copertura geometrica insufficiente nel pilota originale.
+Sono esclusioni specifiche dell'analisi, da rivalutare se cambia il campione.
+La selezione resta completa; la preparazione riporta soltanto gli ID effettivamente
+utilizzati e le esclusioni applicate. Un campione diverso può quindi escludere
+un numero diverso di immagini.
+
+Prima del ricampionamento, entrambe le versioni della preparazione verificano
+selezione, manifest, ID accettati e impronte SHA256 dei file prodotti dal builder.
+Input di provenienza assente o diversa causano un errore. Il riepilogo registra
+l'impronta della selezione e dei metadati di input.
 
 I risultati sono salvati in
 `neurovault_test/outputs/pilot_diverse/prepared_fullcoverage/`:
@@ -126,8 +159,9 @@ Il repository esclude dati scaricati, output generati, ambienti virtuali e
 configurazioni locali tramite `.gitignore`. Queste cartelle vengono ricreate
 dagli script.
 
-Per riprodurre uno specifico campione, conserva separatamente
-`selected_ids.json`, i metadati della selezione e le versioni delle dipendenze.
+Per riprodurre uno specifico campione, versiona `selected_ids.json`,
+`selection_metadata.json` ed `exclusions.json` sotto `selections/pilot_diverse/`,
+e conserva le versioni delle dipendenze. Gli output grandi restano esclusi da Git.
 Il seed rende stabile la selezione a parità di candidati; il contenuto dell'API
 può cambiare nel tempo. I manifest contengono percorsi assoluti locali e vanno
 rigenerati dopo aver spostato il progetto o su un altro computer.
@@ -135,3 +169,17 @@ rigenerati dopo aver spostato il progetto o su un altro computer.
 La disponibilità delle immagini e delle annotazioni dipende dai servizi remoti.
 Per l'uso e la redistribuzione dei dati, consulta le condizioni e le informazioni
 di provenienza delle rispettive collezioni NeuroVault.
+
+
+
+## Test di regressione offline
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+I test richiedono NumPy e usano risposte simulate per i servizi e i volumi.
+Controllano selezione obbligatoria, ID mancanti/aggiuntivi/duplicati, diversità,
+recupero dello snapshot originale, allineamento annotazioni e cambiamenti dei
+file tra download e preparazione. Non effettuano download e non validano la
+registrazione anatomica o l'accuratezza del ricampionamento.
