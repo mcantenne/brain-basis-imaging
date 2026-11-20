@@ -9,6 +9,7 @@ import nilearn
 import numpy as np
 import pandas as pd
 from nilearn import datasets, image, plotting
+from pilot_integrity import verify_preparation_inputs, require_exact_ids, file_hash
 
 
 ROOT = Path(__file__).resolve().parent
@@ -22,9 +23,12 @@ for directory in [OUTPUT_DIR, VOLUME_DIR, FIGURE_DIR]:
 
 # 1. Recupera le mappe che hanno superato i controlli precedenti.
 manifest = pd.read_csv(INPUT_DIR / "manifest.csv", dtype=str)
-accepted_ids = set(json.loads(
-    (INPUT_DIR / "basic_pass_ids.json").read_text()
-))
+accepted_list = json.loads((INPUT_DIR / "basic_pass_ids.json").read_text())
+selection_sha256 = verify_preparation_inputs(
+    INPUT_DIR, ROOT.parent / "selections" / "pilot_diverse",
+    manifest["image_id"].astype(int).tolist(), accepted_list,
+)
+accepted_ids = set(accepted_list)
 
 manifest["image_id"] = manifest["image_id"].astype(int)
 manifest = manifest[
@@ -39,18 +43,23 @@ if set(manifest["image_id"]) != accepted_ids:
     raise RuntimeError("Il manifest non contiene tutti gli ID accettati.")
 
 # Esclusioni specifiche di questa analisi; gli originali restano disponibili.
-excluded_ids = {1753, 1757, 1759}
+exclusions_path = ROOT.parent / "selections" / "pilot_diverse" / "exclusions.json"
+exclusion_reasons = json.loads(exclusions_path.read_text(encoding="utf-8"))
+excluded_ids = {int(value) for value in exclusion_reasons}
 
 excluded = manifest[
     manifest["image_id"].isin(excluded_ids)
 ].copy()
-excluded["exclusion_reason"] = (
-    "Campo di vista geometrico insufficiente: circa 53.1% del riferimento"
+excluded["exclusion_reason"] = excluded["image_id"].map(
+    lambda value: exclusion_reasons[str(value)]
 )
 
 manifest = manifest[
     ~manifest["image_id"].isin(excluded_ids)
 ].reset_index(drop=True)
+
+if manifest.empty:
+    raise RuntimeError("Tutte le immagini sono state escluse.")
 
 # Salva la nuova preparazione separatamente dalla precedente.
 OUTPUT_DIR = INPUT_DIR / "prepared_fullcoverage"
@@ -228,6 +237,11 @@ annotations = pd.read_csv(INPUT_DIR / "image_term_weights.csv")
 if annotations["image_id"].duplicated().any():
     raise RuntimeError("ID duplicati nella matrice delle annotazioni.")
 
+require_exact_ids(
+    pd.read_csv(INPUT_DIR / "manifest.csv")["image_id"].astype(int).tolist(),
+    annotations["image_id"].astype(int).tolist(),
+    "ID annotazioni",
+)
 annotations = annotations.set_index("image_id").loc[ids]
 Y = annotations.to_numpy(dtype=float)
 
@@ -240,6 +254,10 @@ np.save(OUTPUT_DIR / "X_voxels_raw.npy", X)
 
 summary = {
     "nilearn_version": nilearn.__version__,
+    "selection_sha256": selection_sha256,
+    "input_metadata_sha256": file_hash(INPUT_DIR / "metadata.json"),
+    "exclusions_sha256": file_hash(exclusions_path),
+    "excluded_ids": excluded["image_id"].astype(int).tolist(),
     "image_ids": ids.tolist(),
     "reference_shape": list(template.shape),
     "reference_affine": template.affine.tolist(),
@@ -267,3 +285,4 @@ print("Matrice immagini-termini:", Y.shape)
 print("Colonne voxel costanti:", summary["constant_voxel_columns"])
 print("Normalizzazione: nessuna")
 print("Risultati:", OUTPUT_DIR)
+

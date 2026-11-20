@@ -7,16 +7,21 @@ import json
 import nibabel as nib
 import nilearn
 import numpy as np
-from nilearn.datasets import fetch_neurovault, fetch_neurovault_ids
+from nilearn.datasets import fetch_neurovault_ids
+from pilot_integrity import (
+    collection_id, contrast_key, file_hash, load_selection,
+    require_exact_ids, selection_hash,
+)
 
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data" / "pilot"
+SELECTION_DIR = ROOT.parent / "selections" / "pilot_diverse"
+requested_ids, selection_snapshot = load_selection(SELECTION_DIR)
+selection_sha256 = selection_hash(requested_ids)
+# Una cache dedicata per selezione evita di mescolare i piloti precedenti.
+DATA_DIR = ROOT / "data" / "pilot_diverse" / selection_sha256
 OUTPUT_DIR = ROOT / "outputs" / "pilot_diverse"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-SELECTION_FILE = OUTPUT_DIR / "selected_ids.json"
-N_IMAGES = 40
 
 options = dict(
     data_dir=str(DATA_DIR),
@@ -27,29 +32,19 @@ options = dict(
     verbose=3,
 )
 
-# Dopo il primo download, riutilizza gli stessi ID.
-if SELECTION_FILE.exists():
-    image_ids = json.loads(SELECTION_FILE.read_text())
-    dataset = fetch_neurovault_ids(image_ids=image_ids, **options)
-else:
-    dataset = fetch_neurovault(
-        max_images=N_IMAGES,
-        modality="fMRI-BOLD",
-        map_type="Z map",
-        **options,
-    )
-
-if not dataset.images:
-    raise RuntimeError("Nessuna immagine scaricata.")
-
+# Nessuna selezione generica implicita e nessuna riscrittura degli ID richiesti.
+dataset = fetch_neurovault_ids(image_ids=requested_ids, **options)
 image_ids = [int(meta["id"]) for meta in dataset.images_meta]
+require_exact_ids(requested_ids, image_ids, "Risultato del download")
+if len(dataset.images) != len(image_ids):
+    raise RuntimeError("Numero di file diverso dal numero di metadati.")
 
-if SELECTION_FILE.exists():
-    missing = set(json.loads(SELECTION_FILE.read_text())) - set(image_ids)
-    if missing:
-        raise RuntimeError(f"Immagini richieste ma mancanti: {sorted(missing)}")
-else:
-    SELECTION_FILE.write_text(json.dumps(image_ids, indent=2))
+# Verifica anche la provenienza rispetto allo snapshot originale.
+expected_meta = {int(meta["id"]): meta for meta in selection_snapshot["selected_images"]}
+for meta in dataset.images_meta:
+    expected = expected_meta[int(meta["id"])]
+    if (collection_id(meta), contrast_key(meta)) != (collection_id(expected), contrast_key(expected)):
+        raise RuntimeError(f"Metadati di selezione cambiati per ID {meta['id']}.")
 
 if (
     dataset.get("vocabulary") is None
@@ -170,7 +165,15 @@ accepted_ids = [
         {
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "nilearn_version": nilearn.__version__,
-            "requested_count": N_IMAGES,
+            "requested_count": len(requested_ids),
+            "requested_ids": requested_ids,
+            "returned_ids": image_ids,
+            "selection_sha256": selection_sha256,
+            "selection_metadata_sha256": file_hash(SELECTION_DIR / "selection_metadata.json"),
+            "artifact_sha256": {
+                name: file_hash(OUTPUT_DIR / name) for name in
+                ("manifest.csv", "image_term_weights.csv", "basic_pass_ids.json")
+            },
             "images_meta": dataset.images_meta,
             "collections_meta": dataset.collections_meta,
         },
@@ -201,3 +204,4 @@ for row in records:
         print(row["image_id"], ":", row["issues"])
 
 print("\nRisultati:", OUTPUT_DIR)
+

@@ -1,6 +1,7 @@
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import urljoin
+import argparse
 import json
 import random
 
@@ -8,9 +9,12 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from pilot_integrity import collection_id, contrast_key, import_legacy_selection, validate_selection
+
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "outputs" / "pilot_diverse"
+SELECTION_DIR = ROOT.parent / "selections" / "pilot_diverse"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 N_IMAGES = 40
@@ -19,11 +23,19 @@ MAX_PER_CONTRAST = 2
 SEED = 42
 MAX_PAGES = 100
 
-SELECTION_FILE = OUTPUT_DIR / "selected_ids.json"
+SELECTION_FILE = SELECTION_DIR / "selected_ids.json"
+parser = argparse.ArgumentParser(description="Seleziona un campione diversificato.")
+parser.add_argument("--import-legacy", action="store_true",
+                    help="Recupera selection_metadata.json dagli output precedenti.")
+args = parser.parse_args()
+if args.import_legacy:
+    ids = import_legacy_selection(OUTPUT_DIR, SELECTION_DIR)
+    print(f"Recuperati {len(ids)} ID in {SELECTION_DIR}")
+    raise SystemExit(0)
 
-if SELECTION_FILE.exists():
+if SELECTION_FILE.exists() or (SELECTION_DIR / "selection_metadata.json").exists():
     raise SystemExit(
-        "La selezione esiste già. Usa build_diverse_pilot.py "
+        "La selezione esiste già. Usa build_diverse_pilot_v1.py "
         "per scaricare gli stessi ID."
     )
 
@@ -37,28 +49,6 @@ session.mount(
         respect_retry_after_header=True,
     )),
 )
-
-
-def collection_id(meta):
-    value = meta.get("collection_id")
-    if value is None:
-        value = str(meta.get("collection", "")).rstrip("/").split("/")[-1]
-    return int(value)
-
-
-def contrast_key(meta):
-    # Se il contrasto non è specificato, raggruppa conservativamente
-    # usando il compito/paradigma. Non usare il nome del soggetto.
-    for field in [
-        "contrast_definition",
-        "task",
-        "cognitive_contrast_cogatlas",
-        "cognitive_paradigm_cogatlas",
-    ]:
-        value = meta.get(field)
-        if isinstance(value, str) and value.strip():
-            return " ".join(value.lower().split())
-    return "non_specificato"
 
 
 def eligible(meta):
@@ -180,8 +170,14 @@ if len(selected) < N_IMAGES:
     )
 
 ids = [int(meta["id"]) for meta in selected]
+validate_selection(ids, {
+    "selected_images": selected,
+    "max_per_collection": MAX_PER_COLLECTION,
+    "max_per_contrast": MAX_PER_CONTRAST,
+})
+SELECTION_DIR.mkdir(parents=True, exist_ok=True)
 
-(OUTPUT_DIR / "selection_metadata.json").write_text(
+(SELECTION_DIR / "selection_metadata.json").write_text(
     json.dumps(
         {
             "seed": SEED,
@@ -205,3 +201,4 @@ print(Counter(
     (collection_id(meta), contrast_key(meta)) for meta in selected
 ))
 print("\nID salvati in:", SELECTION_FILE)
+
