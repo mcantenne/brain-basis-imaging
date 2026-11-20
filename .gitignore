@@ -1,0 +1,42 @@
+# Python: bytecode, cache e artefatti di build
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Ambienti virtuali
+.venv/
+venv/
+env/
+.env/
+
+# Dati scaricati e risultati rigenerabili
+/neurovault_test/data/
+/neurovault_test/outputs/
+/nilearn_data/
+/neuromaps-data/
+
+# Credenziali e configurazioni locali
+.env
+.env.*
+!.env.example
+/.aws/
+/.codex/
+/.agents/
+
+# Editor e sistema operativo
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
